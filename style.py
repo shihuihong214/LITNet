@@ -11,7 +11,7 @@ from torchvision import datasets
 from torchvision import transforms
 
 import utils
-from network import ImageTransformNet
+from network import ImageTransformNet, ImageTransformNet_dpws
 from vgg import Vgg16
 
 # Global Variables
@@ -21,6 +21,7 @@ LEARNING_RATE = 1e-3
 EPOCHS = 2
 STYLE_WEIGHT = 5e10
 CONTENT_WEIGHT = 1e5
+L1_WEIGHT = 1e5
 TV_WEIGHT = 0
 
 def train(args):          
@@ -54,13 +55,16 @@ def train(args):
         testImage_maine = Variable(testImage_maine.repeat(1, 1, 1, 1), requires_grad=False).type(dtype)
 
     # define network
-    image_transformer = ImageTransformNet().type(dtype)
-    optimizer = Adam(image_transformer.parameters(), LEARNING_RATE) 
+    image_transformer_dpws = ImageTransformNet_dpws().type(dtype)
+    optimizer = Adam(image_transformer_dpws.parameters(), LEARNING_RATE) 
 
     loss_mse = torch.nn.MSELoss()
+    loss_l1 = torch.nn.L1Loss()
 
     # load vgg network
     vgg = Vgg16().type(dtype)
+    image_transformer = ImageTransformNet().type(dtype)
+    image_transformer.load_state_dict(torch.load('/home/shihonghong/StyleTransfer-master/models/starry_night_crop_nosm.model'))
 
     # get training dataset
     dataset_transform = transforms.Compose([
@@ -81,7 +85,7 @@ def train(args):
     style = style_transform(style)
     style = Variable(style.repeat(BATCH_SIZE, 1, 1, 1)).type(dtype)
     style_name = os.path.split(args.style_image)[-1].split('.')[0]
-
+    
     # calculate gram matrices for style feature layer maps we care about
     style_features = vgg(style)
     style_gram = [utils.gram(fmap) for fmap in style_features]
@@ -92,10 +96,11 @@ def train(args):
         img_count = 0
         aggregate_style_loss = 0.0
         aggregate_content_loss = 0.0
+        aggregate_l1_loss = 0.0
         aggregate_tv_loss = 0.0
 
         # train network
-        image_transformer.train()
+        image_transformer_dpws.train()
         for batch_num, (x, label) in enumerate(train_loader):
             img_batch_read = len(x)
             img_count += img_batch_read
@@ -104,8 +109,10 @@ def train(args):
             optimizer.zero_grad()
 
             # input batch to transformer network
+
             x = Variable(x).type(dtype)
-            y_hat = image_transformer(x)
+            y_hat = image_transformer_dpws(x)
+            y_label = image_transformer(x)
 
             # get vgg features
             y_c_features = vgg(x)
@@ -125,6 +132,10 @@ def train(args):
             content_loss = CONTENT_WEIGHT*loss_mse(recon_hat, recon)
             aggregate_content_loss += content_loss.data.item()
 
+            # calculate l1 loss
+            l1_loss = L1_WEIGHT*loss_l1(y_hat, y_label)
+            aggregate_l1_loss += l1_loss.data.item()
+
             # calculate total variation regularization (anisotropic version)
             # https://www.wikiwand.com/en/Total_variation_denoising
             diff_i = torch.sum(torch.abs(y_hat[:, :, :, 1:] - y_hat[:, :, :, :-1]))
@@ -133,7 +144,7 @@ def train(args):
             aggregate_tv_loss += tv_loss.data.item()
 
             # total loss
-            total_loss = style_loss + content_loss + tv_loss
+            total_loss = style_loss + content_loss + tv_loss + l1_loss
 
             # backprop
             total_loss.backward()
