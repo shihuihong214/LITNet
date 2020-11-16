@@ -3,6 +3,7 @@ import torch
 import os
 import argparse
 import time
+import itertools
 
 from torch.autograd import Variable
 from torch.optim import Adam
@@ -11,7 +12,7 @@ from torchvision import datasets
 from torchvision import transforms
 
 import utils
-from network import ImageTransformNet, ImageTransformNet_dpws
+from network import ImageTransformNet, ImageTransformNet_dpws, distiller_1, distiller_2
 from vgg import Vgg16
 
 # Global Variables
@@ -19,12 +20,14 @@ IMAGE_SIZE = 256
 BATCH_SIZE = 4
 LEARNING_RATE = 1e-3
 EPOCHS = 2
-STYLE_WEIGHT = 5e10
-CONTENT_WEIGHT = 1e5
-L1_WEIGHT = 1e5
+
+STYLE_WEIGHT = 1
+CONTENT_WEIGHT = 100
+L1_WEIGHT = 1e-2
+DIS_WEIGHT = 1
 TV_WEIGHT = 0
 
-def train(args):          
+def train(args):
     # GPU enabling
     if (args.gpu != None):
         use_cuda = True
@@ -56,15 +59,22 @@ def train(args):
 
     # define network
     image_transformer_dpws = ImageTransformNet_dpws().type(dtype)
-    optimizer = Adam(image_transformer_dpws.parameters(), LEARNING_RATE) 
+    paras = [image_transformer_dpws.parameters()]
+    # optimizer = Adam(image_transformer_dpws.parameters(), LEARNING_RATE) 
 
     loss_mse = torch.nn.MSELoss()
     loss_l1 = torch.nn.L1Loss()
 
     # load vgg network
+    dis_1 = distiller_1().type(dtype)
+    dis_2 = distiller_2().type(dtype)
+    paras.append(dis_1.parameters())
+    paras.append(dis_2.parameters())
+    optimizer = Adam(itertools.chain(*paras), LEARNING_RATE) 
+   
     vgg = Vgg16().type(dtype)
     image_transformer = ImageTransformNet().type(dtype)
-    image_transformer.load_state_dict(torch.load('/home/shihonghong/StyleTransfer-master/models/starry_night_crop_nosm.model'))
+    image_transformer.load_state_dict(torch.load('models/starry_night_crop_nosm.model'))
 
     # get training dataset
     dataset_transform = transforms.Compose([
@@ -114,9 +124,17 @@ def train(args):
             y_hat = image_transformer_dpws(x)
             y_label = image_transformer(x)
 
+            # ###### distiller ###########
+            dis1 = dis_1(y_label[1])
+            dis2 = dis_2(y_label[2])
+            dis_loss = loss_mse(dis1, y_hat[1])
+            dis_loss += loss_mse(dis2, y_hat[2])
+            dis_loss = DIS_WEIGHT*dis_loss
+            # aggregate_l1_loss += l1_loss.data.item()
+
             # get vgg features
-            y_c_features = vgg(x)
-            y_hat_features = vgg(y_hat)
+            y_c_features = vgg(y_label[0])
+            y_hat_features = vgg(y_hat[0])
 
             # calculate style loss
             y_hat_gram = [utils.gram(fmap) for fmap in y_hat_features]
@@ -133,18 +151,18 @@ def train(args):
             aggregate_content_loss += content_loss.data.item()
 
             # calculate l1 loss
-            l1_loss = L1_WEIGHT*loss_l1(y_hat, y_label)
+            l1_loss = L1_WEIGHT*loss_mse(y_hat[0], y_label[0])
             aggregate_l1_loss += l1_loss.data.item()
 
             # calculate total variation regularization (anisotropic version)
             # https://www.wikiwand.com/en/Total_variation_denoising
-            diff_i = torch.sum(torch.abs(y_hat[:, :, :, 1:] - y_hat[:, :, :, :-1]))
-            diff_j = torch.sum(torch.abs(y_hat[:, :, 1:, :] - y_hat[:, :, :-1, :]))
+            diff_i = torch.sum(torch.abs(y_hat[0][:, :, :, 1:] - y_hat[0][:, :, :, :-1]))
+            diff_j = torch.sum(torch.abs(y_hat[0][:, :, 1:, :] - y_hat[0][:, :, :-1, :]))
             tv_loss = TV_WEIGHT*(diff_i + diff_j)
             aggregate_tv_loss += tv_loss.data.item()
 
             # total loss
-            total_loss = style_loss + content_loss + tv_loss + l1_loss
+            total_loss = style_loss + content_loss + tv_loss + l1_loss + dis_loss
 
             # backprop
             total_loss.backward()
@@ -152,15 +170,14 @@ def train(args):
 
             # print out status message
             if ((batch_num + 1) % 100 == 0):
-                status = "{}  Epoch {}:  [{}/{}]  Batch:[{}]  agg_style: {:.6f}  agg_content: {:.6f}  agg_tv: {:.6f}  style: {:.6f}  content: {:.6f}  tv: {:.6f} ".format(
+                status = "{}  Epoch {}:  [{}/{}]  Batch:[{}]  agg_style: {:.6f}  agg_content: {:.6f}  agg_l1: {:.6f} ".format(
                                 time.ctime(), e + 1, img_count, len(train_dataset), batch_num+1,
-                                aggregate_style_loss/(batch_num+1.0), aggregate_content_loss/(batch_num+1.0), aggregate_tv_loss/(batch_num+1.0),
-                                style_loss.data.item(), content_loss.data.item(), tv_loss.data.item()
-                            )
+                                aggregate_style_loss/(batch_num+1.0), aggregate_content_loss/(batch_num+1.0), aggregate_l1_loss/(batch_num+1.0),
+                                )
                 print(status)
 
             if ((batch_num + 1) % 5000 == 0) and (visualize):
-                image_transformer.eval()
+                image_transformer_dpws.eval()
 
                 if not os.path.exists("visualization"):
                     os.makedirs("visualization")
@@ -175,26 +192,27 @@ def train(args):
                 # dan_path = "visualization/%s/dan_%d_%05d.jpg" %(style_name, e+1, batch_num+1)
                 # utils.save_image(dan_path, outputTestImage_dan.data[0])
 
-                outputTestImage_maine = image_transformer(testImage_maine).cpu()
+                outputTestImage_maine = image_transformer_dpws(testImage_maine)
+                # outputTestImage_maine[0] = outputTestImage_maine[0].cpu()
                 maine_path = "visualization/%s/chicago%d_%05d.jpg" %(style_name, e+1, batch_num+1)
-                utils.save_image(maine_path, outputTestImage_maine.data[0])
+                utils.save_image(maine_path, outputTestImage_maine[0].data[0].cpu())
 
                 print("images saved")
-                image_transformer.train()
+                image_transformer_dpws.train()
 
     # save model
-    image_transformer.eval()
+    image_transformer_dpws.eval()
 
     if use_cuda:
-        image_transformer.cpu()
+        image_transformer_dpws.cpu()
 
     if not os.path.exists("models"):
         os.makedirs("models")
-    filename = "models/" + str(style_name) + "_" + str(time.ctime()).replace(' ', '_') + ".model"
-    torch.save(image_transformer.state_dict(), filename)
+    filename = "models/distiller.model"
+    torch.save(image_transformer_dpws.state_dict(), filename)
     
     if use_cuda:
-        image_transformer.cuda()
+        image_transformer_dpws.cuda()
 
 def style_transfer(args):
     # GPU enabling
