@@ -5,8 +5,6 @@ import argparse
 import time
 import itertools
 
-
-
 from torch.autograd import Variable
 from torch.optim import Adam
 from torch.utils.data import DataLoader
@@ -23,11 +21,16 @@ BATCH_SIZE = 4
 LEARNING_RATE = 1e-3
 EPOCHS = 2
 
-STYLE_WEIGHT = 1
-CONTENT_WEIGHT = 100
-L1_WEIGHT = 1e-2
+STYLE_WEIGHT = 5e4
+CONTENT_WEIGHT = 1e-2
+L1_WEIGHT = 1
 DIS_WEIGHT = 1
 TV_WEIGHT = 0
+# STYLE_WEIGHT = 0
+# CONTENT_WEIGHT = 0
+# L1_WEIGHT = 1
+# DIS_WEIGHT = 0
+# TV_WEIGHT = 0
 
 def train(args):
     # GPU enabling
@@ -141,8 +144,12 @@ def train(args):
             # calculate style loss
             y_hat_gram = [utils.gram(fmap) for fmap in y_hat_features]
             style_loss = 0.0
+            # TODO:
+            # style_weight = [5, 1, 1, 1]
+            style_weight = [1, 1, 1, 1]
             for j in range(4):
                 style_loss += loss_mse(y_hat_gram[j], style_gram[j][:img_batch_read])
+                style_loss = style_weight[j]*style_loss
             style_loss = STYLE_WEIGHT*style_loss
             aggregate_style_loss += style_loss.data.item()
 
@@ -210,7 +217,7 @@ def train(args):
 
     if not os.path.exists("models"):
         os.makedirs("models")
-    filename = "models/distiller.model"
+    filename = "models/smallest.model"
     torch.save(image_transformer_dpws.state_dict(), filename)
     
     if use_cuda:
@@ -242,8 +249,8 @@ def style_transfer(args):
     style_model.load_state_dict(torch.load(args.model_path))
 
     # process input image
-    stylized = style_model(content).cpu()
-    utils.save_image(args.output, stylized.data[0])
+    stylized = style_model(content)
+    utils.save_image(args.output, stylized[0].data[0].cpu())
 
 
 def main():
