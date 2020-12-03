@@ -3,7 +3,6 @@ import torch
 import os
 import argparse
 import time
-import itertools
 
 from torch.autograd import Variable
 from torch.optim import Adam
@@ -12,7 +11,7 @@ from torchvision import datasets
 from torchvision import transforms
 
 import utils
-from network import ImageTransformNet, ImageTransformNet_dpws, distiller_1, distiller_2
+from network import ImageTransformNet
 from vgg import Vgg16
 
 # Global Variables
@@ -20,19 +19,28 @@ IMAGE_SIZE = 256
 BATCH_SIZE = 4
 LEARNING_RATE = 1e-3
 EPOCHS = 2
+# the_scream
+STYLE_WEIGHT = 1e6
+CONTENT_WEIGHT = 1
 
-STYLE_WEIGHT = 5e4
-CONTENT_WEIGHT = 1e-2
-L1_WEIGHT = 1
-DIS_WEIGHT = 1
+# mosaic get
+# STYLE_WEIGHT = 5e4
+# CONTENT_WEIGHT = 1
+
+# la_muse get
+# STYLE_WEIGHT = 5e5
+# CONTENT_WEIGHT = 1
+
+# candy
+# STYLE_WEIGHT = 1e5
+# CONTENT_WEIGHT = 1
+
+# starry_night_crop get
+# STYLE_WEIGHT = 5e10
+# CONTENT_WEIGHT = 1e5
 TV_WEIGHT = 0
-# STYLE_WEIGHT = 0
-# CONTENT_WEIGHT = 0
-# L1_WEIGHT = 1
-# DIS_WEIGHT = 0
-# TV_WEIGHT = 0
 
-def train(args):
+def train(args):          
     # GPU enabling
     if (args.gpu != None):
         use_cuda = True
@@ -63,23 +71,13 @@ def train(args):
         testImage_maine = Variable(testImage_maine.repeat(1, 1, 1, 1), requires_grad=False).type(dtype)
 
     # define network
-    image_transformer_dpws = ImageTransformNet_dpws().type(dtype)
-    paras = [image_transformer_dpws.parameters()]
-    # optimizer = Adam(image_transformer_dpws.parameters(), LEARNING_RATE) 
+    image_transformer = ImageTransformNet().type(dtype)
+    optimizer = Adam(image_transformer.parameters(), LEARNING_RATE) 
 
     loss_mse = torch.nn.MSELoss()
-    loss_l1 = torch.nn.L1Loss()
 
     # load vgg network
-    dis_1 = distiller_1().type(dtype)
-    dis_2 = distiller_2().type(dtype)
-    paras.append(dis_1.parameters())
-    paras.append(dis_2.parameters())
-    optimizer = Adam(itertools.chain(*paras), LEARNING_RATE) 
-   
     vgg = Vgg16().type(dtype)
-    image_transformer = ImageTransformNet().type(dtype)
-    image_transformer.load_state_dict(torch.load('models/starry_night_crop_nosm.model'))
 
     # get training dataset
     dataset_transform = transforms.Compose([
@@ -100,7 +98,7 @@ def train(args):
     style = style_transform(style)
     style = Variable(style.repeat(BATCH_SIZE, 1, 1, 1)).type(dtype)
     style_name = os.path.split(args.style_image)[-1].split('.')[0]
-    
+
     # calculate gram matrices for style feature layer maps we care about
     style_features = vgg(style)
     style_gram = [utils.gram(fmap) for fmap in style_features]
@@ -111,11 +109,10 @@ def train(args):
         img_count = 0
         aggregate_style_loss = 0.0
         aggregate_content_loss = 0.0
-        aggregate_l1_loss = 0.0
         aggregate_tv_loss = 0.0
 
         # train network
-        image_transformer_dpws.train()
+        image_transformer.train()
         for batch_num, (x, label) in enumerate(train_loader):
             img_batch_read = len(x)
             img_count += img_batch_read
@@ -124,32 +121,18 @@ def train(args):
             optimizer.zero_grad()
 
             # input batch to transformer network
-
             x = Variable(x).type(dtype)
-            y_hat = image_transformer_dpws(x)
-            y_label = image_transformer(x)
-
-            # ###### distiller ###########
-            dis1 = dis_1(y_label[1])
-            dis2 = dis_2(y_label[2])
-            dis_loss = loss_mse(dis1, y_hat[1])
-            dis_loss += loss_mse(dis2, y_hat[2])
-            dis_loss = DIS_WEIGHT*dis_loss
-            # aggregate_l1_loss += l1_loss.data.item()
+            y_hat = image_transformer(x)
 
             # get vgg features
-            y_c_features = vgg(y_label[0])
-            y_hat_features = vgg(y_hat[0])
+            y_c_features = vgg(x)
+            y_hat_features = vgg(y_hat)
 
             # calculate style loss
             y_hat_gram = [utils.gram(fmap) for fmap in y_hat_features]
             style_loss = 0.0
-            # TODO:
-            # style_weight = [5, 1, 1, 1]
-            style_weight = [1, 1, 1, 1]
             for j in range(4):
                 style_loss += loss_mse(y_hat_gram[j], style_gram[j][:img_batch_read])
-                style_loss = style_weight[j]*style_loss
             style_loss = STYLE_WEIGHT*style_loss
             aggregate_style_loss += style_loss.data.item()
 
@@ -159,19 +142,15 @@ def train(args):
             content_loss = CONTENT_WEIGHT*loss_mse(recon_hat, recon)
             aggregate_content_loss += content_loss.data.item()
 
-            # calculate l1 loss
-            l1_loss = L1_WEIGHT*loss_mse(y_hat[0], y_label[0])
-            aggregate_l1_loss += l1_loss.data.item()
-
             # calculate total variation regularization (anisotropic version)
             # https://www.wikiwand.com/en/Total_variation_denoising
-            diff_i = torch.sum(torch.abs(y_hat[0][:, :, :, 1:] - y_hat[0][:, :, :, :-1]))
-            diff_j = torch.sum(torch.abs(y_hat[0][:, :, 1:, :] - y_hat[0][:, :, :-1, :]))
+            diff_i = torch.sum(torch.abs(y_hat[:, :, :, 1:] - y_hat[:, :, :, :-1]))
+            diff_j = torch.sum(torch.abs(y_hat[:, :, 1:, :] - y_hat[:, :, :-1, :]))
             tv_loss = TV_WEIGHT*(diff_i + diff_j)
             aggregate_tv_loss += tv_loss.data.item()
 
             # total loss
-            total_loss = style_loss + content_loss + tv_loss + l1_loss + dis_loss
+            total_loss = style_loss + content_loss + tv_loss
 
             # backprop
             total_loss.backward()
@@ -179,14 +158,15 @@ def train(args):
 
             # print out status message
             if ((batch_num + 1) % 100 == 0):
-                status = "{}  Epoch {}:  [{}/{}]  Batch:[{}]  agg_style: {:.6f}  agg_content: {:.6f}  agg_l1: {:.6f} ".format(
+                status = "{}  Epoch {}:  [{}/{}]  Batch:[{}]  agg_style: {:.6f}  agg_content: {:.6f}  agg_tv: {:.6f}  style: {:.6f}  content: {:.6f}  tv: {:.6f} ".format(
                                 time.ctime(), e + 1, img_count, len(train_dataset), batch_num+1,
-                                aggregate_style_loss/(batch_num+1.0), aggregate_content_loss/(batch_num+1.0), aggregate_l1_loss/(batch_num+1.0),
-                                )
+                                aggregate_style_loss/(batch_num+1.0), aggregate_content_loss/(batch_num+1.0), aggregate_tv_loss/(batch_num+1.0),
+                                style_loss.data.item(), content_loss.data.item(), tv_loss.data.item()
+                            )
                 print(status)
 
-            if ((batch_num + 1) % 5000 == 0) and (visualize):
-                image_transformer_dpws.eval()
+            if ((batch_num + 1) % 5000 == 0):
+                image_transformer.eval()
 
                 if not os.path.exists("visualization"):
                     os.makedirs("visualization")
@@ -201,27 +181,41 @@ def train(args):
                 # dan_path = "visualization/%s/dan_%d_%05d.jpg" %(style_name, e+1, batch_num+1)
                 # utils.save_image(dan_path, outputTestImage_dan.data[0])
 
-                outputTestImage_maine = image_transformer_dpws(testImage_maine)
-                # outputTestImage_maine[0] = outputTestImage_maine[0].cpu()
+                outputTestImage_maine = image_transformer(testImage_maine).cpu()
                 maine_path = "visualization/%s/chicago%d_%05d.jpg" %(style_name, e+1, batch_num+1)
-                utils.save_image(maine_path, outputTestImage_maine[0].data[0].cpu())
+                utils.save_image(maine_path, outputTestImage_maine.data[0])
 
                 print("images saved")
-                image_transformer_dpws.train()
+                
+                if (e == 1):
+                    image_transformer.eval()
+
+                    if use_cuda:
+                        image_transformer.cpu()
+
+                    if not os.path.exists("models/the_scream"):
+                        os.makedirs("models/the_scream")
+                    filename = "models/the_scream/%d_%05d.model" %( e+1, batch_num+1)
+                    torch.save(image_transformer.state_dict(), filename)
+    
+                    if use_cuda:
+                        image_transformer.cuda()
+
+                image_transformer.train()
 
     # save model
-    image_transformer_dpws.eval()
+    # image_transformer.eval()
 
-    if use_cuda:
-        image_transformer_dpws.cpu()
+    # if use_cuda:
+    #     image_transformer.cpu()
 
-    if not os.path.exists("models"):
-        os.makedirs("models")
-    filename = "models/smallest.model"
-    torch.save(image_transformer_dpws.state_dict(), filename)
+    # if not os.path.exists("models/candy"):
+    #     os.makedirs("models/candy")
+    # filename = "models/candy/original.model"
+    # torch.save(image_transformer.state_dict(), filename)
     
-    if use_cuda:
-        image_transformer_dpws.cuda()
+    # if use_cuda:
+    #     image_transformer.cuda()
 
 def style_transfer(args):
     # GPU enabling
@@ -249,8 +243,8 @@ def style_transfer(args):
     style_model.load_state_dict(torch.load(args.model_path))
 
     # process input image
-    stylized = style_model(content)
-    utils.save_image(args.output, stylized[0].data[0].cpu())
+    stylized = style_model(content).cpu()
+    utils.save_image(args.output, stylized.data[0])
 
 
 def main():
