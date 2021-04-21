@@ -1,0 +1,19 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: 当前文件",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "args": [
+                // "train", "--style-image", "style_imgs/starry_night.jpg", "--dataset", "/media/HD1/COCO/images" ,"--gpu" ,"1", "--visualize", "1"
+                "transfer", "--model-path", "models/candy/original.model", "--source", "content_imgs/chicago.jpg", "--output", "resualt/candy/chi_original.jpg", "--gpu", "2"
+            ]
+        }
+    ]
+}

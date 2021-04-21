@@ -17,9 +17,9 @@ class ConvLayer(nn.Module):
 
 
 class ConvLayer_dpws(nn.Module):
-    def __init__(self, in_channels, out_channels, stride):
+    def __init__(self, in_channels, out_channels, kernel_size, stride):
         super(ConvLayer_dpws, self).__init__()
-        self.conv1 = ConvLayer(in_channels, in_channels, kernel_size=3, stride=stride, groups=in_channels)
+        self.conv1 = ConvLayer(in_channels, in_channels, kernel_size, stride=stride, groups=in_channels)
         self.in_1d = nn.InstanceNorm2d(in_channels, affine=True)
         self.conv2 = ConvLayer(in_channels, out_channels, kernel_size=1, stride=1)
         self.in_2d = nn.InstanceNorm2d(out_channels, affine=True)
@@ -29,6 +29,22 @@ class ConvLayer_dpws(nn.Module):
     def forward(self, x):
         out = self.in_1d(self.conv1(x))
         out = self.relu(self.in_2d(self.conv2(out)))
+        return out
+
+
+class ConvLayer_dpws_last(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride):
+        super(ConvLayer_dpws_last, self).__init__()
+        self.conv1 = ConvLayer(in_channels, in_channels, kernel_size, stride=stride, groups=in_channels)
+        self.in_1d = nn.InstanceNorm2d(in_channels, affine=True)
+        self.conv2 = ConvLayer(in_channels, out_channels, kernel_size=1, stride=1)
+        # self.in_2d = nn.InstanceNorm2d(out_channels, affine=True)
+        # self.relu = nn.ReLU()
+
+    def forward(self, x):
+        out = self.in_1d(self.conv1(x))
+        # out = self.relu(self.in_2d(self.conv2(out)))
+        out = self.conv2(out)
         return out
 
 # Upsample Conv Layer
@@ -57,9 +73,6 @@ class UpsampleConvLayer_dpws(nn.Module):
         self.upsample = upsample
         if upsample:
             self.upsample = nn.Upsample(scale_factor=upsample, mode='nearest')
-        # reflection_padding = kernel_size // 2
-        # self.reflection_pad = nn.ReflectionPad2d(reflection_padding)
-        # self.conv2d = nn.Conv2d(in_channels, out_channels, kernel_size, stride=stride, groups=in_channels)
         self.conv1 = ConvLayer(in_channels, in_channels, kernel_size, stride, groups=in_channels)
         self.in1 = nn.InstanceNorm2d(in_channels, affine=True )
         self.conv2 = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1)
@@ -80,13 +93,14 @@ class DeConvLayer(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, stride):
         super(DeConvLayer, self).__init__()
 
-        reflection_padding = kernel_size // 2
+        # reflection_padding = kernel_size // 2
         # self.reflection_pad = nn.ReflectionPad2d(reflection_padding)
         self.deconv2d = nn.ConvTranspose2d(in_channels, out_channels, kernel_size, stride, padding=1, output_padding=1)
     def forward(self, x):
         # out = self.reflection_pad(x)
         out = self.deconv2d(x)
         return out
+
 # Residual Block
 #   adapted from pytorch tutorial
 #   https://github.com/yunjey/pytorch-tutorial/blob/master/tutorials/02-
@@ -105,7 +119,10 @@ class ResidualBlock(nn.Module):
     def forward(self, x):
         residual = x
         out = self.relu(self.in1(self.conv1(x)))
+        # out = self.relu(self.in2(self.conv2(out)))
         out = self.in2(self.conv2(out))
+        # out = self.relu(self.conv2(out))
+        # out = self.conv2(out)
         out = out + residual
         # out = self.relu(out)
        
@@ -221,6 +238,9 @@ class ImageTransformNet(nn.Module):
         y = self.relu(self.in1_e(self.conv1(x)))
         y = self.relu(self.in2_e(self.conv2(y)))
         y = self.relu(self.in3_e(self.conv3(y)))
+        # y = self.relu(self.conv1(x))
+        # y = self.relu(self.conv2(y))
+        # y = self.relu(self.conv3(y))
         y_downsample = y
 
         # residual layers
@@ -234,76 +254,19 @@ class ImageTransformNet(nn.Module):
         # decode
         y = self.relu(self.in3_d(self.deconv3(y)))
         y = self.relu(self.in2_d(self.deconv2(y)))
+        # y = self.relu(self.deconv3(y))
+        # y = self.relu(self.deconv2(y))
         # y = self.tanh(self.in1_d(self.deconv1(y)))
         y = self.deconv1(y)
 
-        return y, y_downsample, y_upsample
+        # return y, y_downsample, y_upsample
+        return y
 
 
-# class ImageTransformNet_dpws(nn.Module):
-    # def __init__(self):
-    #     super(ImageTransformNet_dpws, self).__init__()
-        
-    #     # nonlineraity
-    #     self.relu = nn.ReLU()
-    #     self.tanh = nn.Tanh()
-
-    #     # encoding layers
-    #     self.conv1 = ConvLayer(3, 32, kernel_size=9, stride=1)
-    #     self.in1_e = nn.InstanceNorm2d(32, affine=True )
-
-    #     self.conv2 = ConvLayer(32, 64, kernel_size=3, stride=2)
-    #     self.in2_e = nn.InstanceNorm2d(64, affine=True )
-
-    #     self.conv3 = ConvLayer(64, 128, kernel_size=3, stride=2)
-    #     self.in3_e = nn.InstanceNorm2d(128, affine=True )
-
-    #     # residual layers
-    #     self.res1 = ResidualBlock_depthwise(128)
-    #     self.res2 = ResidualBlock_depthwise(128)
-    #     self.res3 = ResidualBlock_depthwise(128)
-    #     self.res4 = ResidualBlock_depthwise(128)
-    #     self.res5 = ResidualBlock_depthwise(128)
-    #     # self.res6 = ResidualBlock_depthwise(128)
-
-    #     # decoding layers
-    #     # TODO:
-    #     # self.deconv3 = DeConvLayer(128, 64, kernel_size=3, stride=2)
-    #     self.deconv3 = UpsampleConvLayer(128, 64, kernel_size=3, stride=1, upsample=2)
-    #     self.in3_d = nn.InstanceNorm2d(64, affine=True )
-
-    #     # self.deconv2 = DeConvLayer(64, 32, kernel_size=3, stride=2)
-    #     self.deconv2 = UpsampleConvLayer(64, 32, kernel_size=3, stride=1, upsample=2)
-    #     self.in2_d = nn.InstanceNorm2d(32, affine=True )
-
-    #     self.deconv1 = ConvLayer(32, 3, kernel_size=9, stride=1)
-    #     self.in1_d = nn.InstanceNorm2d(3, affine=True )
-
-    # def forward(self, x):
-    #     # encode
-    #     y = self.relu(self.in1_e(self.conv1(x)))
-    #     y = self.relu(self.in2_e(self.conv2(y)))
-    #     y = self.relu(self.in3_e(self.conv3(y)))
-
-    #     # residual layers
-    #     y = self.res1(y)
-    #     y = self.res2(y)
-    #     y = self.res3(y)
-    #     y = self.res4(y)
-    #     y = self.res5(y)
-    #     # y = self.res6(y)
-
-    #     # decode
-    #     y = self.relu(self.in3_d(self.deconv3(y)))
-    #     y = self.relu(self.in2_d(self.deconv2(y)))
-    #     # y = self.tanh(self.in1_d(self.deconv1(y)))
-    #     y = self.deconv1(y)
-
-    #     return y
-
-
-ALAPHA_1 = 0.75
-ALAPHA_2 = 0.5
+ALAPHA_1 = 0.25
+ALAPHA_2 = 0.25
+# ALAPHA_1 = 0.5
+# ALAPHA_2 = 0.5
 class ImageTransformNet_dpws(nn.Module):
     def __init__(self):
         super(ImageTransformNet_dpws, self).__init__()
@@ -313,25 +276,11 @@ class ImageTransformNet_dpws(nn.Module):
         self.tanh = nn.Tanh()
 
         # encoding layers
-        self.conv1 = ConvLayer(3, 32, kernel_size=9, stride=1)
-        self.in1_e = nn.InstanceNorm2d(32, affine=True )
-
-        # depthwise
-        # self.conv2 = ConvLayer(32, 32, kernel_size=3, stride=2, groups=32)
-        # # self.in2_e = nn.InstanceNorm2d(32, affine=True )
-        # self.conv3 = nn.Conv2d(32, int(64*ALAPHA_1), kernel_size=1, stride=1)
-        # # self.in3_e = nn.InstanceNorm2d(int(64*ALAPHA_1), affine=True )
-
-        # self.conv4 = ConvLayer(int(64*ALAPHA_1), int(64*ALAPHA_1), kernel_size=3, stride=2, groups=int(64*ALAPHA_1))
-        # # self.in4_e = nn.InstanceNorm2d(int(64*ALAPHA_1), affine=True )
-        # self.conv5 = nn.Conv2d(int(64*ALAPHA_1), int(128*ALAPHA_2), kernel_size=1, stride=1)
-        self.conv2 = ConvLayer_dpws(32, int(64*ALAPHA_1), stride= 2)
-        self.conv3 = ConvLayer_dpws(int(64*ALAPHA_1), int(128*ALAPHA_2), stride= 2)
-        # self.in5_e = nn.InstanceNorm2d(int(128*ALAPHA_2), affine=True )
-        # self.conv2 = ConvLayer(int(32*ALAPHA), int(64*ALAPHA), kernel_size=3, stride=2)
-        # self.in2_e = nn.InstanceNorm2d(int(64*ALAPHA), affine=True )
-        # self.conv3 = ConvLayer(int(64*ALAPHA), int(128*ALAPHA), kernel_size=3, stride=2)
-        # self.in3_e = nn.InstanceNorm2d(int(128*ALAPHA), affine=True )
+        self.conv1 = ConvLayer_dpws(3, int(32*ALAPHA_1), kernel_size=9, stride=1)
+        # self.in1_e = nn.InstanceNorm2d(int(32*ALAPHA_1), affine=True )
+        
+        self.conv2 = ConvLayer_dpws(int(32*ALAPHA_1), int(64*ALAPHA_1), kernel_size=3, stride= 2)
+        self.conv3 = ConvLayer_dpws(int(64*ALAPHA_1), int(128*ALAPHA_2), kernel_size=3, stride= 2)
 
         # residual layers
         self.res1 = ResidualBlock_depthwise(int(128*ALAPHA_2))
@@ -344,24 +293,21 @@ class ImageTransformNet_dpws(nn.Module):
         # decoding layers
         # TODO:
         # self.deconv3 = DeConvLayer(128, 64, kernel_size=3, stride=2)
-        self.deconv3 = UpsampleConvLayer(int(128*ALAPHA_2), int(64*ALAPHA_1), kernel_size=3, stride=1, upsample=2)
-        self.in3_d = nn.InstanceNorm2d(int(64*ALAPHA_1), affine=True )
+        self.deconv3 = UpsampleConvLayer_dpws(int(128*ALAPHA_2), int(64*ALAPHA_1), kernel_size=3, stride=1, upsample=2)
+        # self.in3_d = nn.InstanceNorm2d(int(64*ALAPHA_1), affine=True )
 
         # self.deconv2 = DeConvLayer(64, 32, kernel_size=3, stride=2)
-        self.deconv2 = UpsampleConvLayer(int(64*ALAPHA_1), 32, kernel_size=3, stride=1, upsample=2)
-        self.in2_d = nn.InstanceNorm2d(32, affine=True )
+        self.deconv2 = UpsampleConvLayer_dpws(int(64*ALAPHA_1), int(32*ALAPHA_1), kernel_size=3, stride=1, upsample=2)
+        # self.in2_d = nn.InstanceNorm2d(32, affine=True )
 
-        self.deconv1 = ConvLayer(32, 3, kernel_size=9, stride=1)
+        self.deconv1 = ConvLayer_dpws_last(int(32*ALAPHA_1), 3, kernel_size=9, stride=1)
+        # self.deconv1 = ConvLayer_dpws_last(int(32*ALAPHA_1), 3, kernel_size=9, stride=1)
         # self.in1_d = nn.InstanceNorm2d(3, affine=True )
 
     def forward(self, x):
         # encode
-        y = self.relu(self.in1_e(self.conv1(x)))
-       
-        # y = self.conv2(y)
-        # y = self.relu(self.conv3(y))
-        # y = self.conv4(y)
-        # y = self.relu(self.conv5(y))
+        # y = self.relu(self.in1_e(self.conv1(x)))
+        y = self.conv1(x)
         y = self.conv2(y)
         y = self.conv3(y)
         y_downsample = y
@@ -378,13 +324,12 @@ class ImageTransformNet_dpws(nn.Module):
         y_upsample = y
 
         # decode
-        # y = self.deconv3(y)
-        # y = self.deconv2(y)
-        y = self.relu(self.in3_d(self.deconv3(y)))
-        y = self.relu(self.in2_d(self.deconv2(y)))
+        y = self.deconv3(y)
+        y = self.deconv2(y)
         y = self.deconv1(y)
 
-        return y, y_downsample, y_upsample
+        # return y, y_downsample, y_upsample
+        return y
 
 class distiller_1(nn.Module):
     def __init__(self):
